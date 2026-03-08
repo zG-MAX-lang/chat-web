@@ -10,5 +10,16 @@ export default defineNuxtConfig({
   ],
   app: {
     pageTransition: { name: 'page', mode: 'out-in' }
+  },
+  // ✨ 新增：全局路由代理转发规则
+  routeRules: {
+    // 1. 将所有以 /api/ 开头的请求，转发到后端的 8089 端口
+    '/api/**': { 
+      proxy: 'http://localhost:8089/api/**' 
+    },
+    // 2. 将滑块验证码 /captcha/ 开头的请求，也转发到 8089 端口
+    '/captcha/**': { 
+      proxy: 'http://localhost:8089/captcha/**' 
+    }
   }
 })

@@ -28,7 +28,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   // ================= 4. 完整表单登录 (账号+密码+验证码) =================
-  const loginWithPassword = async (payload: { username: string, password: string, captcha: string }) => {
+  const loginWithPassword = async (payload: { username: string, password: string, captchaVerification: string }) => {
     try {
       // TODO: 替换为真实的后端 API 请求
       // const res = await $fetch('/api/admin/account/login', { method: 'POST', body: payload })
