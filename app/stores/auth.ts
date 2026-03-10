@@ -1,8 +1,8 @@
 // stores/auth.ts
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { authApi } from '~/api/auth'
 // Nuxt 3 自动导入了 useCookie，这里不需要单独 import
-
 export const useAuthStore = defineStore('auth', () => {
   // ================= 1. UI 状态 =================
   const isLoginModalOpen = ref(false)
@@ -31,36 +31,15 @@ export const useAuthStore = defineStore('auth', () => {
   const loginWithPassword = async (payload: { username: string, password: string, captchaVerification: string }) => {
     try {
       // TODO: 替换为真实的后端 API 请求
+      const res =await authApi.login(payload)
+      accessToken.value=res.data.accessToken
+      refreshToken.value=res.data.refreshToken
       // const res = await $fetch('/api/admin/account/login', { method: 'POST', body: payload })
-      
-      // ---------- 模拟网络延迟和后端返回 ----------
-      await new Promise(resolve => setTimeout(resolve, 800))
-      
-      const mockResponse = {
-        code: 200,
-        data: {
-          accessToken: 'mock_access_token_123',
-          refreshToken: 'mock_refresh_token_456',
-          user: { 
-            nickname: payload.username, 
-            avatar: `https://api.dicebear.com/7.x/notionists/svg?seed=${payload.username}` 
-          }
-        }
+      savedUserInfo.value = {
+        nickname: res.data.userInfo.nickname,
+        avatar: res.data.userInfo.avatar
       }
-      // --------------------------------------------
-
-      if (mockResponse.code === 200) {
-        // 1. 存储双 Token
-        accessToken.value = mockResponse.data.accessToken
-        refreshToken.value = mockResponse.data.refreshToken
-        
-        // 2. 存储用户信息供下次快捷登录使用
-        savedUserInfo.value = mockResponse.data.user
-        
-        return Promise.resolve(true)
-      } else {
-        return Promise.reject(new Error('登录失败'))
-      }
+      return Promise.resolve(true)
     } catch (error) {
       return Promise.reject(error)
     }
@@ -73,30 +52,26 @@ export const useAuthStore = defineStore('auth', () => {
       return Promise.reject(new Error('Refresh Token 不存在'))
     }
 
+  const refreshAccessToken = async () => {
+    if (!refreshToken.value) return Promise.reject(new Error('Refresh Token 不存在'))
+
     try {
-      // TODO: 替换为真实的刷新接口
-      // const res = await $fetch('/api/admin/account/refresh', { method: 'POST', body: { refreshToken: refreshToken.value } })
+      // ✨ 极简调用
+      const res = await authApi.refresh(refreshToken.value)
       
-      // ---------- 模拟：测试环境下 50% 概率成功，50% 概率过期 ----------
-      await new Promise((resolve, reject) => {
-         setTimeout(() => {
-           Math.random() > 0.5 ? resolve(true) : reject(new Error('Token 已在后端过期'))
-         }, 800)
-      })
-      // ----------------------------------------------------------------
-
-      // 模拟拿到了新的 Access Token
-      accessToken.value = 'new_mock_access_token_789'
+      accessToken.value = res.data.accessToken
+      if (res.data.refreshToken) {
+        refreshToken.value = res.data.refreshToken
+      }
       return Promise.resolve(true)
-
     } catch (error) {
-      // 核心防御：如果刷新失败（比如 Redis 里查不到、已过期），必须清理本地凭证
       accessToken.value = null
       refreshToken.value = null
-      
-      // 注意：这里故意【不清理】 savedUserInfo。这样哪怕过期了强制要求重新登录，界面依然可以亲切地显示头像
       return Promise.reject(error)
     }
+  }
+      
+
   }
 
   // ================= 6. 登出动作 =================

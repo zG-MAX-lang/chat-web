@@ -1,15 +1,23 @@
+<script setup lang="ts">
+import { Toaster } from 'vue-sonner'
+</script>
+
 <template>
- 
   <div>
+
+    <ClientOnly>
+      <Toaster position="top-center" richColors />
+    </ClientOnly>
     <NuxtLayout>
       <NuxtPage />
     </NuxtLayout>
+    
     <ClientOnly>
-    <LoginModal />
-  </ClientOnly>
+      <LoginModal />
+    </ClientOnly>
   </div>
-
 </template>
+
 <style>
 /* 页面过渡动画定义 */
 .page-enter-active,
@@ -19,11 +27,11 @@
 
 .page-enter-from {
   opacity: 0;
-  transform: translateY(10px); /* 新页面从稍微偏下的位置淡入 */
+  transform: translateY(10px); 
 }
 
 .page-leave-to {
   opacity: 0;
-  transform: translateY(-10px); /* 老页面向上淡出 */
+  transform: translateY(-10px); 
 }
 </style>
