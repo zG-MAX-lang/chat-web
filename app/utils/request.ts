@@ -1,102 +1,146 @@
 import { toast } from 'vue-sonner'
-import { useAuthStore } from '~/stores/auth'
+import type { FetchOptions } from 'ofetch'
 
-// ================= 1. 核心锁与队列 =================
+type ApiResult<T = unknown> = {
+  code: number
+  msg?: string
+  message?: string
+  data: T
+}
+
+type QueueItem = {
+  resolve: () => void
+  reject: (error: unknown) => void
+}
+
 let isRefreshing = false
-let requestsQueue: Array<() => void> = []
+let requestsQueue: QueueItem[] = []
 
-// ================= 2. 底层实例 =================
+const TOKEN_ERROR_CODES = [401, 4011, 4012, 4013, 4014]
+
 const fetchInstance = $fetch.create({
-  onRequest({ options }) {
-    const authStore = useAuthStore()
-    const token = authStore.accessToken
+  onRequest({ request, options }) {
+    const token = useCookie<string | null>('access_token').value
+    const url = request.toString()
 
-    options.headers = new Headers(options.headers)
-    if (token) {
+    options.headers = new Headers(options.headers || {})
+    if (token && !url.includes('/refresh')) {
       options.headers.set('Authorization', `Bearer ${token}`)
     }
-    options.timeout = 10000 
+
+    options.timeout = 10000
   }
-  // 💡 删除了原有的 onResponseError，统一集中在外层处理
 })
 
-// ================= 3. 终极包装器 =================
-export const request = async <T = any>(url: string, options: any = {}): Promise<T> => {
-  const authStore = useAuthStore()
+type CustomFetchOptions = Parameters<typeof $fetch>[1]
 
+export const request = async <T = unknown>(
+  url: string,
+  options: CustomFetchOptions = {} as CustomFetchOptions
+): Promise<ApiResult<T>> => {
   try {
-    // 发起真实的请求
-    const response = await fetchInstance<any>(url, options)
+    const response = await fetchInstance<ApiResult<T>>(url, options as FetchOptions<'json'>)
 
-    // 【情况 A】：HTTP 状态码是 200 的情况
-    // 兼容后端不同的字段命名习惯（message 还是 msg）
-    const resCode = response.code || response.status
-    const resMessage = response.message || response.msg || '业务处理失败'
+    const code = response.code
+    const message = response.msg || response.message || '请求失败'
 
-    if (resCode === 200) {
-      return response // 真正成功，放行
+    if (code === 1 || code === 200) {
+      return response
     }
 
-    if (resCode === 401) {
-      return handleUnauthorized(url, options, authStore) // 走无感刷新
+    if (TOKEN_ERROR_CODES.includes(code) && !url.includes('/refresh')) {
+      return handleUnauthorized<T>(url, options as FetchOptions<'json'>)
     }
 
-    // HTTP 200 下的业务报错 (如：密码错误)
-    toast.error(resMessage)
-    return Promise.reject(new Error(resMessage))
-
+    toast.error(message)
+    throw new Error(message)
   } catch (error: any) {
-    // 【情况 B】：HTTP 状态码不是 2xx 的情况 (如后端抛异常导致 HTTP 400 或 500)
-    // ofetch 会直接抛出异常跳到这里！我们必须从 error.response._data 中提取报错！
-    
-    const errorResponse = error.response
-    
-    // ✨ 核心修复：精准提取后端抛出的真实错误提示（如 "账号已存在"）
-    const backendErrorMsg = errorResponse?._data?.message || errorResponse?._data?.msg
-    
-    // 特殊拦截 HTTP 401 状态码
-    if (errorResponse?.status === 401 || errorResponse?._data?.code === 401) {
-      return handleUnauthorized(url, options, authStore)
+    const status = error?.response?.status
+    const data = error?.response?._data || {}
+    const backendCode = data.code
+    const backendMessage = data.msg || data.message
+
+    if (
+      status === 401 ||
+      (TOKEN_ERROR_CODES.includes(backendCode) && !url.includes('/refresh'))
+    ) {
+      return handleUnauthorized<T>(url, options as FetchOptions<'json'>)
     }
 
-    // 弹出报错提示
-    if (backendErrorMsg) {
-      // 成功提取到后端的业务提示："账号已存在"
-      toast.error(backendErrorMsg)
-    } else {
-      // 后端连 JSON 都不返回时的兜底机制
-      const status = errorResponse?.status
-      if (status === 500) toast.error('服务器内部出错了')
-      else if (status === 404) toast.error('请求的接口不存在')
-      else toast.error('网络连接异常')
+    if (backendMessage) {
+      toast.error(backendMessage)
+      throw new Error(backendMessage)
     }
 
-    return Promise.reject(error)
+    toast.error('网络连接异常，请稍后重试')
+    throw error
   }
 }
 
-// ================= 4. 抽离的无感刷新业务代码 =================
-const handleUnauthorized = (url: string, options: any, authStore: any): Promise<any> => {
+const handleUnauthorized = async <T = unknown>(
+  url: string,
+  options: FetchOptions<'json'>
+): Promise<ApiResult<T>> => {
   if (isRefreshing) {
-    return new Promise((resolve) => {
-      requestsQueue.push(() => {
-        resolve(request(url, options)) 
+    return new Promise((resolve, reject) => {
+      requestsQueue.push({
+        resolve: () => {
+          request<T>(url, options as CustomFetchOptions).then(resolve).catch(reject)
+        },
+        reject
       })
     })
   }
 
   isRefreshing = true
-  return authStore.refreshAccessToken().then(() => {
-    requestsQueue.forEach((cb) => cb())
+
+  try {
+    const refreshTokenCookie = useCookie<string | null>('refresh_token')
+    if (!refreshTokenCookie.value) {
+      throw new Error('登录已过期')
+    }
+
+    const refreshRes = await $fetch<ApiResult<{ accessToken?: string; token?: string; refreshToken?: string }>>(
+      '/api/auth/refresh',
+      {
+        method: 'POST',
+        body: { refreshToken: refreshTokenCookie.value },
+        headers: {
+          Authorization: `Bearer ${refreshTokenCookie.value}`
+        }
+      }
+    )
+
+    if (refreshRes.code !== 1 && refreshRes.code !== 200) {
+      throw new Error(refreshRes.msg || refreshRes.message || '刷新 Token 失败')
+    }
+
+    const accessTokenCookie = useCookie<string | null>('access_token')
+    accessTokenCookie.value = refreshRes.data?.accessToken || refreshRes.data?.token || null
+    if (refreshRes.data?.refreshToken) {
+      refreshTokenCookie.value = refreshRes.data.refreshToken
+    }
+
+    requestsQueue.forEach((item) => item.resolve())
     requestsQueue = []
-    return request(url, options) // 重发当前失败的请求
-  }).catch((refreshError: any) => {
+
+    return await request<T>(url, options as CustomFetchOptions)
+  } catch (refreshError) {
+    requestsQueue.forEach((item) => item.reject(refreshError))
     requestsQueue = []
-    authStore.logout()
-    navigateTo('/')
+
+    useCookie<string | null>('access_token').value = null
+    useCookie<string | null>('refresh_token').value = null
+
     toast.warning('登录状态已过期，请重新登录')
-    return Promise.reject(refreshError)
-  }).finally(() => {
+
+    if (import.meta.client) {
+      window.location.href = '/'
+    }
+
+    throw refreshError
+  } finally {
     isRefreshing = false
-  })
+  }
 }
+
